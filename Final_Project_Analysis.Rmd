@@ -1,0 +1,604 @@
+---
+title: "Final_Project"
+author: "Ankit, Nathan, Chris"
+date: "7/25/2020"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+  toc: true
+  number_sections: true
+fontsize: 11pt
+geometry: margin=1in
+---
+
+\tableofcontents
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# load packages 
+library(foreign)
+library(data.table)
+library(knitr)
+library(magrittr)
+library(AER)
+library(sandwich)
+library(stargazer)
+library(xtable)
+# library(kableExtra)
+library(readxl)
+library(writexl)
+library(dplyr)
+
+```
+
+<!-- ## Abstract -->
+
+<!-- ## Introduction -->
+
+\newpage
+```{r}
+# Randomization
+# read in the csv
+getwd()
+setwd("/Users/Games/Desktop/Berkeley DS/Summer 2020/w241/finalProject/Product_Image_Experiment/")
+
+zip_pop_df <- read.csv('pop-by-zip-code_all.csv')
+
+# puts 0s for zipcodes
+zip_pop_df$zip_code <- as.character(zip_pop_df$zip_code)
+
+zip_pop_df_2 <- data.frame(zip_code = rep(NA,length(zip_pop_df$zip_code)),
+                   y2016 = rep(NA,length(zip_pop_df$zip_code)),
+                   stringsAsFactors = FALSE)
+
+
+for(i in 1:nrow(zip_pop_df)) {
+  row <- zip_pop_df[i,]
+  # do stuff with row
+  if (nchar(row$zip_code) == 3){
+    row$zip_code <- paste("00",row$zip_code, sep="")
+    }
+  else if (nchar(row$zip_code) == 4){
+    row$zip_code <- paste("0",row$zip_code, sep="")
+  }
+  else{
+    row$zip_code <- row$zip_code
+  }
+  zip_pop_df_2[i,] <- row
+  }
+
+
+summary(zip_pop_df_2)
+
+zip_pop_df_3 <- zip_pop_df_2[zip_pop_df_2$y2016>=10000,]
+
+
+zip_vec <- sample(zip_pop_df_3$zip_code,size=99)
+
+# filter dataframe for everything larger than 10,000 as mean is 9724
+
+
+
+application <- function(subjects) { 
+  
+  sample(c(rep("offerup",subjects),rep("letgo", subjects), rep("cragslist", subjects)))
+} 
+
+app_col <- application(33)
+
+
+treatment <- function(subjects) { 
+  
+  sample(c(rep("control",subjects),rep("treatment_1", subjects), rep("treatment_2", subjects)))
+} 
+
+
+treatment_col <- treatment(33)
+
+products <- function(subjects) { 
+  
+  sample(c(rep("Speaker",subjects),rep("Bycicle from Rocket Next", subjects), rep("Keurig", subjects), rep("VTECH", subjects), 
+           rep("Logitech Pro Gaming Mouse", subjects), rep("Kid's Study Table", subjects), rep("Retrospec Longboard", subjects), 
+           rep("Love Letter Board Game", subjects), rep("Patio Chairs", subjects), rep("Apple Mouse", subjects),
+           rep("Apple Keyboard", subjects)))
+} 
+
+products_col <- products(9)
+
+final_df <- data.frame(zip_vec, app_col, treatment_col, products_col)
+# 
+# final_df["app"] <- app_col
+# final_df["treatment"] <- treatment_col
+# final_df["products"] <- products_col
+
+
+
+# write_xlsx(final_df, "C:/Users/Games/Desktop/Berkeley DS/Summer 2020/w241/finalProject/zipcode_pop_experiment_3.xlsx")
+
+```
+
+# Setup & Pre-Experiment
+```{r, echo=FALSE, results=FALSE}
+# Power Analysis
+power_test_t <- function(
+  mean_control = 10, 
+  mean_treat = 11, 
+  sd_control = 3, 
+  sd_treat = 3.5,
+  number_per_condition = 40, 
+  power_loops = 100, 
+  ri_loops = 100, 
+  verbose = TRUE) { 
+
+    p_values <- NA   
+    ri <- NA 
+    d <- data.table()
+  
+    d[ , condition := rep(c('control', 'treatment'), each = number_per_condition)]  
+  
+    for(power_loop in 1:power_loops) { 
+      if(verbose == TRUE) {
+        if(power_loop %% 10 == 0) {
+          cat(sprintf('Loop Number: %.0f\n', power_loop))
+        }
+      } 
+      p_values[power_loop] <- t.test(
+        x = rnorm(number_per_condition, mean = mean_control, sd = sd_control), 
+        y = rnorm(number_per_condition, mean = mean_treat, sd = sd_treat)
+      )$p.value
+    }
+      
+    return(list(
+      'p_values' = p_values, 
+      'power' = mean(p_values < 0.05)
+      ))
+}
+```
+
+```{r}
+# Increasing sample size
+samples_per_condition <- c(10, 20, 40, 50, 60, 70, 80, 90, 100)
+
+size_power <- NA 
+
+for(i in 1:length(samples_per_condition)) { 
+  size_power[i] <- power_test_t(
+    mean_control = 14.0, mean_treat = 18.0, 
+    sd_control = 5, sd_treat =  5,
+    power_loops = 1000, verbose = FALSE,
+    number_per_condition = samples_per_condition[i]
+    )$power
+}
+
+plot(x = samples_per_condition, y = size_power, type = 'l')
+```
+
+
+# Results Loading
+
+```{r, echo=FALSE, results=FALSE}
+# Navigate to working directory with data.
+getwd()
+setwd("/Users/Games/Desktop/Berkeley DS/Summer 2020/w241/finalProject/Product_Image_Experiment/")
+df_og = read.csv('w241-Experimental-Data.csv')
+df = data.table(df_og)
+```
+
+
+# Data Preprocessing
+
+```{r, echo=FALSE,results=FALSE}
+# Note: We've already cleared and filtered all of the non-response, spam, etc, other data.
+
+# 'EDA' for R's schema inference
+str(df)
+names(df)
+
+# Convert Price to Numeric
+df$Price <- as.numeric(gsub('\\$','',df$Price))
+
+# Convert Zip to String
+df$zip_vec <- as.character(df$zip_vec)
+
+# Relevel App
+df$app = relevel(df$app,ref='letgo')
+
+# Create a Treatment_Final
+df[treatment=='control',treatment_final:='placebo']
+df[treatment=='treatment_1',treatment_final:='t1']
+df[treatment=='treatment_2',treatment_final:='t2']
+df[,treatment_final := .(factor(treatment_final))]
+
+# Fill NA with 0
+df[is.na(Views), Views:=0]
+
+# Drop our non-data columns:
+df[, c('Description','Craigslist.Geo','Craigslist.Geo.1','Photo.Folder.Link','X','Views.1','treatment'):=NULL]
+
+
+# Create column for alternate outcome
+df[Views != 0,outcome2 := .(Responses/Views)]
+
+
+summary(df)
+```
+```{r}
+# Summary tables for information.
+kable(xtable(unique(df[,c('products','Price')])))
+
+# Write to CSV for easy pasting into report.
+#write.csv(unique(df[,c('products','Price')]),'lol.csv')
+```
+```{r, echo=FALSE}
+# Generate Additional Summary Data Tables
+# Commented out; unnecessary.
+# kable(df[order(app,treatment_final,products),
+#          .(count=.N,total_responses=sum(Responses)),
+#          by=list(app,treatment_final,products)],
+#       caption = 'Overall Results')
+
+# Additional Table for Printing for Final Report
+kable(df[order(app,treatment_final),
+         .(count=.N,
+           total_responses=sum(Responses),
+           total_views=sum(Views)),
+         by=list(app,treatment_final)],
+      caption = 'Final Experimental Design')
+
+# Commented out; simply used to write to csv.
+# n <- df[order(app,treatment_final),
+#          .(count=.N,
+#            total_responses=sum(Responses),
+#            total_views=sum(Views)),
+#          by=list(app,treatment_final)]
+#write.csv(n,'hahaha.csv')
+```
+
+# EDA
+```{r}
+boxplot(Responses~treatment_final,
+data=df,
+main="Distributions of the number of responses for all groups",
+xlab="Groups",
+ylab="Number of Responses",
+col="cyan",
+border="brown"
+)
+```
+
+```{r}
+# Generate Additional Summary Data Tables
+kable(df[order(app,treatment_final,products),
+         .(count=.N,total_responses=sum(Responses)),
+         by=list(app,treatment_final,products)],
+      caption = 'Overall Results')
+
+
+kable(df[order(app,treatment_final),
+         .(count=.N,
+           total_responses=sum(Responses), 
+           total_views=sum(Views)),
+         by=list(app,treatment_final)], 
+      caption = 'Overall Results')
+```
+
+
+# Analysis I: Zip Codes are Enrolled Entities; Integer Outcome Variable
+- All data included, including Craigslist.
+
+```{r, warning=FALSE, results=FALSE, echo=FALSE}
+#df = df[Views > 0,]
+# baseline regression of our responses when considering treatment effect
+# all data included here
+lm1.0 <- df[,lm(Responses ~ treatment_final)]
+lm1.0_results <- coeftest(lm1.0, vcovHC(lm1.0))
+lm1.0_results
+
+# add in price
+lm1.1 <- df[,lm(Responses ~ treatment_final + products)]
+lm1.1_results <- coeftest(lm1.1, vcovHC(lm1.1))
+lm1.1_results
+
+# add in product fixed effects
+lm1.4 <- df[,lm(Responses ~ treatment_final + app)]
+lm1.4_results <- coeftest(lm1.4, vcovHC(lm1.4))
+lm1.4_results
+
+# add in population
+lm1.2 <- df[,lm(Responses ~ treatment_final + app + Population)]
+lm1.2_results <- coeftest(lm1.2, vcovHC(lm1.2))
+lm1.2_results
+
+# add in interactions
+lm1.3 <- df[,lm(Responses ~ treatment_final*(app) + Population)]
+lm1.3_results <- coeftest(lm1.3, vcovHC(lm1.3))
+lm1.3_results
+```
+```{r, results = 'asis', message=FALSE}
+stargazer(lm1.0,
+          lm1.1,
+          lm1.4,
+          lm1.2,
+          lm1.3,
+          se = list(
+          sqrt(diag(vcovHC(lm1.0))), 
+          sqrt(diag(vcovHC(lm1.1))),
+          sqrt(diag(vcovHC(lm1.4))),
+          sqrt(diag(vcovHC(lm1.2))),
+          sqrt(diag(vcovHC(lm1.3)))),
+          type='latex',
+          omit=c('products'),
+          omit.stat='f',
+          add.lines=list(c('Product Fixed Effects?','No','Yes','No','No','No')),
+          dep.var.caption  = 'Dependent Variable: Responses',
+          title='Analysis I: Raw Response Volumes vs. Product Images + Covariates',
+          font.size = "tiny")
+```
+
+```{r}
+# F test for two most relevant models.
+anova(lm1.3,lm1.4, test='F')
+
+# Confidence intervals for reporting.
+confint(lm1.0_results)
+confint(lm1.1_results)
+confint(lm1.4_results)
+confint(lm1.2_results)
+confint(lm1.3_results)
+```
+
+\newpage 
+
+## Analysis II: Views are Individual Enrollees; CACE, Binary Outcome Variable
+- Craigslist data excluded (N/A)
+
+```{r, warning=FALSE, results=FALSE, echo=FALSE}
+# Replicate each row for # of views
+df5 <- data.table(df)
+df5 <- df5[Views > 0,]
+df5[,No_Response := .(Views-Responses)]
+df5.1 <- df5[rep(seq_len(dim(df5)[1]), df5[,Responses]),]
+df5.1 <- df5.1[,outcome := .(1)]
+
+df5.2 <- df5[rep(seq_len(dim(df5)[1]), df5[,No_Response]),]
+df5.2 <- df5.2[,outcome := .(0)]
+
+df5_f <- rbind(df5.1, df5.2)
+
+# Commented out -- these are logit responses.
+# lm4.0 <- df5_f[,glm(formula = outcome ~ treatment_final
+#              ,family=binomial(link=logit), 
+#              data = df5_f)]
+# # add price
+# lm4.1 <- df5_f[,glm(formula = outcome ~ treatment_final + Price
+#              ,family=binomial(link=logit), 
+#              data = df5_f)]
+# 
+# # add app and population
+# lm4.2 <- df5_f[,glm(formula = outcome ~ treatment_final + Price + app + Population
+#              ,family=binomial(link=logit), 
+#              data = df5_f)]
+
+lm4.0 <- df5_f[,lm(formula = outcome ~ treatment_final)]
+lm4.0_results <- coeftest(lm4.0, vcovCL(lm4.0,cluster = df5_f[,zip_vec]))
+lm4.0_results
+
+# add price
+lm4.1 <- df5_f[,lm(formula = outcome ~ treatment_final + app + products)]
+lm4.1_results <- coeftest(lm4.1, vcovCL(lm4.1,cluster = df5_f[,zip_vec]))
+lm4.1_results
+# add app and population
+lm4.2 <- df5_f[,lm(formula = outcome ~ treatment_final + app)]
+lm4.2_results <- coeftest(lm4.2, vcovCL(lm4.2,cluster = df5_f[,zip_vec]))
+lm4.2_results
+# add interaction terms
+lm4.3 <- df5_f[,lm(formula = outcome ~ treatment_final*app)]
+lm4.3_results <- coeftest(lm4.3, vcovCL(lm4.3,cluster = df5_f[,zip_vec]))
+lm4.3_results
+```
+
+```{r, results='asis',message=FALSE}
+# Stargazer to format.
+# Latex / PDF format for screengrabs.
+stargazer(lm4.0,
+          lm4.1,
+          lm4.2,
+          lm4.3,
+          se = list(
+          sqrt(diag(vcovCL(lm4.0,cluster = df5_f[,zip_vec]))), 
+          sqrt(diag(vcovCL(lm4.1,cluster = df5_f[,zip_vec]))),
+          sqrt(diag(vcovCL(lm4.2,cluster = df5_f[,zip_vec]))),
+          sqrt(diag(vcovCL(lm4.3,cluster = df5_f[,zip_vec])))),
+          omit=c('zip_vec','products'),
+          type='latex',
+          omit.stat='f',
+          dep.var.caption  = 'Dependent Variable: Response for each View Observation',
+          title='Analysis II: Responses for Each View vs. Product Images + Covariates',
+          add.lines=list(c('Product Fixed Effects:','No','Yes','No','No'),
+                         c('df:','2528','2527','2517','2515')),
+          df = FALSE,
+          font.size='tiny')
+```
+
+```{r}
+# F test of the two most relevant models.
+anova(lm4.3, lm4.2,test='F')
+
+# Compute confidence intervals for reporting purposes.
+confint(lm4.0_results)
+confint(lm4.1_results)
+confint(lm4.2_results)
+confint(lm4.3_results)
+```
+
+
+<!-- # Remainder is supporting analysis and commentary already implicitly incorporated in the final paper -->
+<!-- # Ignore all else following this for now. -->
+<!-- ## Key Takeaways: -->
+
+<!-- - Price uncorrelated with outcome variable due to randomization selection / pre-planned variance built into experimental design: -->
+<!--   - No change in the treatment outcome estimate between Regression 1 and Regression 2 -->
+<!--   - Price coefficient not statistically: p-value > 0.05 by a large margin -->
+<!--   - Price coefficient not practically or practically significant estimate is near 0. -->
+<!--   - Price coefficient is as expected, weakly negative. Law of Demand; Quantity Demanded decreases as Price increases -->
+
+<!-- - Letgo appears to be an app with statistically significant impact; relative to Legto, Craigslist and Offerup both receive an average of ~3 fewer responses. -->
+<!--   - We expect this to take into account the variations in popularity and viewcount of the platform. -->
+<!--   - We test this in the next regression; we do not have viewcounts for every single observation. -->
+<!--     - While both estimates are statistically significant relative to Letgo, they do not appear to be statistically significant relative to each other -->
+<!--     - We see this in the fact that Estimate for Offerup + 2x SE for Offerup overlaps Craigslist (in fact, the two are quite close) -->
+<!--     - This is tested more formally below, through a re-factored regression -->
+
+<!-- - Treatment effects are statistically and practically significant. Relative to baseline / placebo: -->
+<!--   - Products with 1 picture tend to receive 2.3 more views -->
+<!--   - Products with 5 pictures tend to receive 2.9 more views -->
+<!--     - While both are statistically significant relatve to baseline, it does not appear that T2 is statistically significant relative to T1. -->
+<!--     - We can see this in the fact that the Estimate for T1 + 2*SE for T1 overlaps the estimate for T2. -->
+<!--     - We test this more formally below, through a re-factored regression -->
+
+<!-- - Population of zip codes is uncorrelated with treatment. -->
+
+<!-- ```{r} -->
+<!-- #supporting regression for relative app and treatment effects -->
+<!-- df2 <- data.table(df) -->
+<!-- df2[,app := relevel(app, ref = 'offerup')] -->
+<!-- df2[,treatment_final := relevel(treatment_final,ref='t1')] -->
+<!-- # add in app -->
+<!-- lm1.3 <- df2[,lm(Responses ~ treatment_final + Price + app + Population)] -->
+<!-- lm1.3_results <- coeftest(lm1.3, vcovHC(lm1.3)) -->
+<!-- lm1.3_results -->
+
+<!-- stargazer(lm1.0, -->
+<!--           lm1.1, -->
+<!--           lm1.2, -->
+<!--           se = list( -->
+<!--           sqrt(diag(vcovHC(lm1.0))),  -->
+<!--           sqrt(diag(vcovHC(lm1.1))), -->
+<!--           sqrt(diag(vcovHC(lm1.2)))), -->
+<!--           type='text') -->
+<!-- ``` -->
+
+<!-- We can see in the above regression, with a re-leveled reference for the categorical variables for treatment and app, T2's estimate is not significantly different compared to T1s, and Craigslist is not significantly different than Offerup. -->
+
+<!-- ## Ratio of Responses to Views -->
+
+<!-- ```{r} -->
+<!-- # Regression Analysis - Secondary Responses -->
+<!-- df6 <- data.table(df) -->
+<!-- df6 <- df6[df6[,Views != 0]] -->
+
+<!-- # only offerup and letgo data included here -->
+<!-- lm6.0 <- df6[,lm(outcome2 ~ treatment_final)] -->
+<!-- lm6.0_results <- coeftest(lm6.0, vcovHC(lm6.0)) -->
+<!-- lm6.0_results -->
+
+<!-- # add in price -->
+<!-- lm6.1 <- df6[,lm(outcome2 ~ treatment_final + Price)] -->
+<!-- lm6.1_results <- coeftest(lm6.1, vcovHC(lm6.1)) -->
+<!-- lm6.1_results -->
+
+<!-- # add in app -->
+<!-- lm6.2 <- df6[,lm(outcome2 ~ treatment_final + Price + app + Population)] -->
+<!-- lm6.2_results <- coeftest(lm6.2, vcovHC(lm6.2)) -->
+<!-- lm6.2_results -->
+<!-- ``` -->
+
+<!-- # ## Separate Regression 1: Product Views as a Regressor -->
+<!-- #  -->
+<!-- # Instead of using population as the proxy for 'number of treatments enrolled', we can use actual product views, as recorded by platforms. Craigslist does not offer this, so we can only do this for Offerup and Letgo. -->
+<!-- #  -->
+<!-- # ```{r} -->
+<!-- # # Regression Analysis - Secondary Responses -->
+<!-- # df3 <- data.table(df) -->
+<!-- # df3 <- df3[df3[,Views != 0]] -->
+<!-- #  -->
+<!-- # # only offerup and letgo data included here -->
+<!-- # lm2.0 <- df3[,lm(Responses ~ treatment_final)] -->
+<!-- # lm2.0_results <- coeftest(lm2.0, vcovHC(lm2.0)) -->
+<!-- # lm2.0_results -->
+<!-- #  -->
+<!-- # # add in price -->
+<!-- # lm2.1 <- df3[,lm(Responses ~ treatment_final + Price)] -->
+<!-- # lm2.1_results <- coeftest(lm2.1, vcovHC(lm2.1)) -->
+<!-- # lm2.1_results -->
+<!-- #  -->
+<!-- # # add in app -->
+<!-- # lm2.2 <- df3[,lm(Responses ~ treatment_final + Price + app)] -->
+<!-- # lm2.2_results <- coeftest(lm2.2, vcovHC(lm2.2)) -->
+<!-- # lm2.2_results -->
+<!-- #  -->
+<!-- # # add in Views -->
+<!-- # lm2.3 <- df3[,lm(Responses ~ treatment_final + Price + app + Views)] -->
+<!-- # lm2.3_results <- coeftest(lm2.3, vcovHC(lm2.3)) -->
+<!-- # lm2.3_results -->
+<!-- #  -->
+<!-- # stargazer(lm2.0, -->
+<!-- #           lm2.1, -->
+<!-- #           lm2.2, -->
+<!-- #           lm2.3, -->
+<!-- #           se = list( -->
+<!-- #           sqrt(diag(vcovHC(lm2.0))),  -->
+<!-- #           sqrt(diag(vcovHC(lm2.1))), -->
+<!-- #           sqrt(diag(vcovHC(lm2.2))), -->
+<!-- #           sqrt(diag(vcovHC(lm2.3)))), -->
+<!-- #           type='text') -->
+<!-- # ``` -->
+<!-- #  -->
+<!-- # ### Key takeaways -->
+<!-- #  -->
+<!-- # - We see that with inclusion of pageviews, which may be driven by platform / digital popularity at each zip code (or also a proxy for zip code population), the treatment effects disappear. -->
+<!-- #  -->
+<!-- # - The number of views become the most highly statistically significant, along with the app (which we would actually also expect to correlate highly with viewcount). -->
+<!-- # - Addition of views gives strong explanatory power; R-squared jumps from one to the other. -->
+<!-- #  -->
+<!-- # ## Separate Regression 2: Product Views as a Secondary Outcome -->
+<!-- #  -->
+<!-- # Instead of using population as the proxy for 'number of treatments enrolled', we can use actual product views, as recorded by platforms. Craigslist does not offer this, so we can only do this for Offerup and Letgo. -->
+<!-- #  -->
+<!-- # ```{r} -->
+<!-- # # Regression Analysis - Secondary Responses -->
+<!-- # df4 <- data.table(df) -->
+<!-- # df4 <- df4[df4[,Views != 0]] -->
+<!-- #  -->
+<!-- # # only offerup and letgo data included here -->
+<!-- # lm3.0 <- df4[,lm(Views ~ treatment_final)] -->
+<!-- # lm3.0_results <- coeftest(lm3.0, vcovHC(lm3.0)) -->
+<!-- # lm3.0_results -->
+<!-- #  -->
+<!-- # # add in price -->
+<!-- # lm3.1 <- df4[,lm(Views ~ treatment_final + Price)] -->
+<!-- # lm3.1_results <- coeftest(lm3.1, vcovHC(lm3.1)) -->
+<!-- # lm3.1_results -->
+<!-- #  -->
+<!-- # # add in app and population -->
+<!-- # lm3.2 <- df4[,lm(Views ~ treatment_final + Price + app + Population)] -->
+<!-- # lm3.2_results <- coeftest(lm3.2, vcovHC(lm3.2)) -->
+<!-- # lm3.2_results -->
+<!-- #  -->
+<!-- # stargazer(lm3.0, -->
+<!-- #           lm3.1, -->
+<!-- #           lm3.2, -->
+<!-- #           se = list( -->
+<!-- #           sqrt(diag(vcovHC(lm3.0))),  -->
+<!-- #           sqrt(diag(vcovHC(lm3.1))), -->
+<!-- #           sqrt(diag(vcovHC(lm3.2)))), -->
+<!-- #           type='text') -->
+<!-- # ``` -->
+
+<!-- ### Key Takeaways -->
+
+<!-- - In general, we see the similar statistical significance as to the product regression. -->
+<!-- - We saw that Page Views had high correlation and explanatory power with Responses, so this makes sense. -->
+<!-- - In this case, population is a significant predictor for page views. -->
+
+
+
+
+
+
+<!-- ### Key Takeaways -->
+
+<!-- - In general, we see the similar statistical significance as to the product regression. -->
+<!-- - We saw that Page Views had high correlation and explanatory power with Responses, so this makes sense. -->
+<!-- - In this case, population is a significant predictor for page views. -->
+
+
